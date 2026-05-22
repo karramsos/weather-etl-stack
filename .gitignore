@@ -36,3 +36,4 @@ dbt/my_project/logs/
 .python_imports.txt
 .py_files.txt
 .rg_path.txt
+.git_*.txt
