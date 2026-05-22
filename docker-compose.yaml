@@ -1,0 +1,139 @@
+services:
+  db:
+    container_name: postgres_container
+    image: postgres:16.14
+    env_file:
+      - ./.env.local
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./postgres/data:/var/lib/postgresql/data
+      - ./postgres/airflow_init.sql:/docker-entrypoint-initdb.d/airflow_init.sql
+      - ./postgres/superset_init.sql:/docker-entrypoint-initdb.d/superset_init.sql
+    networks:
+      - my-network
+  
+  af:
+    container_name: airflow_container
+    image: apache/airflow:3.2.1
+    env_file:
+      - ./.env.local
+    command: standalone
+    ports:
+      - "8000:8080"
+    user: "0"
+    environment:
+      AIRFLOW__API_AUTH_BACKENDS: airflow.api.auth.backend.session,airflow.api.auth.backend.basic_auth
+    volumes:
+      - airflow_home:/opt/airflow
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/secrets/simple_auth_manager_passwords.json:/opt/airflow/simple_auth_manager_passwords.json
+      - ./api-request:/opt/airflow/api-request
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - db
+    networks:
+      - my-network
+  dbt:
+      container_name: dbt_container
+      image: ghcr.io/dbt-labs/dbt-postgres:1.9.latest
+      volumes: 
+        - ./dbt/my_project:/usr/app
+        - ./dbt/profiles.yml:/root/.dbt/profiles.yml
+      working_dir: /usr/app
+      environment:
+        DBT_PROFILES_DIR: "/root/.dbt"
+      depends_on:
+        - db
+      networks:
+        - my-network
+      command: run
+
+  superset-db-init:
+    image: postgres:16.14
+    container_name: superset_db_init_container
+    env_file:
+      - ./.env.local
+    depends_on:
+      - db
+    command: >
+      bash -c "
+      until pg_isready -h db -p 5432 -U $$POSTGRES_USER; do
+        echo 'Waiting for Postgres...';
+        sleep 2;
+      done;
+      psql postgresql://$$POSTGRES_USER:$$POSTGRES_PASSWORD@db:5432/$$POSTGRES_DB -tAc \"SELECT 1 FROM pg_roles WHERE rolname='$$SUPERSET_DB_USER'\" | grep -q 1 || psql postgresql://$$POSTGRES_USER:$$POSTGRES_PASSWORD@db:5432/$$POSTGRES_DB -v ON_ERROR_STOP=1 -c \"CREATE ROLE $$SUPERSET_DB_USER LOGIN PASSWORD '$$SUPERSET_DB_PASSWORD'\";
+      psql postgresql://$$POSTGRES_USER:$$POSTGRES_PASSWORD@db:5432/$$POSTGRES_DB -tAc \"SELECT 1 FROM pg_database WHERE datname='$$SUPERSET_DB_NAME'\" | grep -q 1 || psql postgresql://$$POSTGRES_USER:$$POSTGRES_PASSWORD@db:5432/$$POSTGRES_DB -v ON_ERROR_STOP=1 -c \"CREATE DATABASE $$SUPERSET_DB_NAME OWNER $$SUPERSET_DB_USER\";
+      "
+    networks:
+      - my-network
+
+  superset-init:
+    image: apache/superset:3.0.0
+    container_name: superset_init_container
+    env_file:
+      - ./.env.local
+    environment:
+      SUPERSET_CONFIG_PATH: /app/pythonpath/superset_config.py
+    command: >
+      bash -c "
+      superset db upgrade &&
+      (superset fab list-users | grep -q $$SUPERSET_ADMIN_USERNAME ||
+      superset fab create-admin --username $$SUPERSET_ADMIN_USERNAME --firstname Superset --lastname Admin --email $$SUPERSET_ADMIN_EMAIL --password $$SUPERSET_ADMIN_PASSWORD) &&
+      superset init &&
+      python /app/pythonpath/register_warehouse_db.py
+      "
+    depends_on:
+      superset-db-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+    networks:
+      - my-network
+    volumes:
+      - ./docker/superset_config.py:/app/pythonpath/superset_config.py
+      - ./docker/register_warehouse_db.py:/app/pythonpath/register_warehouse_db.py
+      - superset_home:/app/superset_home
+
+  superset:
+    image: apache/superset:3.0.0
+    container_name: superset_container
+    env_file:
+      - ./.env.local
+    command: ["/bin/sh", "-c", "gunicorn --bind 0.0.0.0:8088 --workers 2 --timeout 120 'superset.app:create_app()'"]
+    restart: unless-stopped
+    ports:
+      - "8088:8088"
+    environment:
+      SUPERSET_CONFIG_PATH: /app/pythonpath/superset_config.py
+    depends_on:
+      superset-init:
+        condition: service_completed_successfully
+    networks:
+      - my-network
+    volumes:
+      - ./docker/superset_config.py:/app/pythonpath/superset_config.py
+      - ./docker/register_warehouse_db.py:/app/pythonpath/register_warehouse_db.py
+      - superset_home:/app/superset_home
+
+  redis:
+    container_name: redis_container
+    image: redis:7
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis:/data
+    networks:
+      - my-network
+
+
+
+networks:
+  my-network:
+    driver: bridge
+
+volumes:
+  airflow_home:
+  redis:
+  superset_home:

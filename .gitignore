@@ -1,0 +1,38 @@
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python virtual env and cache
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Tooling and OS artifacts
+.DS_Store
+.idea/
+.vscode/
+
+# Local database/data volumes
+postgres/data/
+
+# dbt generated artifacts
+dbt/my_project/target/
+dbt/my_project/logs/
+
+# Temporary/debug files
+*.tmp
+*.log
+.airflow_*
+.af_up*
+.compose_resolved.yaml
+.docker_ps*.txt
+.simple_auth_manager_snippet.py
+.tool_check.txt
+.repo_listing*.txt
+.python_imports.txt
+.py_files.txt
+.rg_path.txt
